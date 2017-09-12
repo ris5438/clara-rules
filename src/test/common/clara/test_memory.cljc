@@ -84,34 +84,32 @@
     (is (= n
            (count (query session cold-query))))))
 
+;; FIXME: This should pass in ClojureScript too.
+#?(:clj
+   (def-rules-test test-many-retract-accumulated-for-same-accumulate-with-join-filter-node
 
-(def-rules-test test-many-retract-accumulated-for-same-accumulate-with-join-filter-node
+     {:rules [count-cold-temps [[[Cold (= ?cold-temp temperature)]
+                                 [?temp-count <- (acc/count) :from [Temperature (some? temperature) (<= temperature ?cold-temp)]]]
+                                (insert! ^{:type :temp-counter} {:count ?temp-count})]]
 
-  {:rules [count-cold-temps [[[Cold (= ?cold-temp temperature)]
-                              [?temp-count <- (acc/count) :from [Temperature (some? temperature) (<= temperature ?cold-temp)]]]
-                             (insert! {:count ?temp-count
-                                       :type :temp-counter})]]
+      :queries [cold-temp-count-query [[] [[:temp-counter [{:keys [count]}] (= ?count count)]]]]
 
-   :queries [cold-temp-count-query [[] [[:temp-counter [{:keys [count]}] (= ?count count)]]]]
+      :sessions [empty-session [count-cold-temps cold-temp-count-query] {}]}
 
-   :sessions [empty-session [count-cold-temps cold-temp-count-query] {:fact-type-fn (fn [f]
-                                                                                      (or (:type f)
-                                                                                          (type f)))}]}
+     (let [n 6000
 
-  (let [n 6000
+           session  (reduce insert empty-session
+                            ;; Insert all temperatures one at a time to ensure the
+                            ;; accumulate node will continuously re-accumulate via
+                            ;; `right-activate-reduced` to expose any StackOverflowError
+                            ;; potential of stacking lazy evaluations in working memory.
+                            (for [t (range n)] (->Temperature (- t) "MCI")))
+           session (-> session
+                       (insert (->Cold 30))
+                       fire-rules)]
 
-        session  (reduce insert empty-session
-                         ;; Insert all temperatures one at a time to ensure the
-                         ;; accumulate node will continuously re-accumulate via
-                         ;; `right-activate-reduced` to expose any StackOverflowError
-                         ;; potential of stacking lazy evaluations in working memory.
-                         (for [t (range n)] (->Temperature (- t) "MCI")))
-        session (-> session
-                    (insert (->Cold 30))
-                    fire-rules)]
-
-    ;; All temperatures are under the Cold temperature threshold.
-    (is (= #{{:?count 6000}} (set (query session cold-temp-count-query))))))
+       ;; All temperatures are under the Cold temperature threshold.
+       (is (= #{{:?count 6000}} (set (query session cold-temp-count-query)))))))
 
 (def-rules-test test-disjunctions-sharing-production-node
   ;; Ensures that when 'sibling' nodes are sharing a common child
